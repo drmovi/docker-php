@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+
+SUPERVISOR_CONFIG_FILE=/etc/supervisor/conf.d/supervisord.conf
+
+touch "$SUPERVISOR_CONFIG_FILE"
+
+IFS='|' read -r -a Q_CONNECTIONS <<<"$QUEUES_CONNECTIONS"
+
+QUEUE_LOG_FILE=/var/www/storage/logs/queue.log
+
+touch "$QUEUE_LOG_FILE"
+
+for CONNECTION in "${Q_CONNECTIONS[@]}"; do
+    NORMALIZED_WORKER_NAME=${CONNECTION/,/-}
+    cat <<-EOT >>${SUPERVISOR_CONFIG_FILE}
+[program:laravel-worker-$NORMALIZED_WORKER_NAME]
+ command=php -d variables_order=EGPCS /var/www/artisan queue:work --queue=$CONNECTION --sleep=3 --tries=3
+ autostart=true
+ user=root
+ redirect_stderr=true
+ stdout_logfile=$QUEUE_LOG_FILE
+EOT
+done
+if [ "$SCHEDULER" = "true" ]; then
+
+SCHEDULE_LOG_FILE=/var/www/storage/logs/schedule.log
+
+touch "$SCHEDULE_LOG_FILE"
+
+    cat <<-EOT >>${SUPERVISOR_CONFIG_FILE}
+[program:laravel-schedule]
+ numprocs=1
+ autostart=true
+ autorestart=true
+ redirect_stderr=true
+ process_name=%(program_name)s_%(process_num)02d
+ command=php /var/www/artisan schedule:run
+ stdout_logfile=$SCHEDULE_LOG_FILE
+EOT
+fi
+
+if [ "$NOTIFICATION" = "true" ]; then
+
+NOTIFICATION_LOG_FILE=/var/www/storage/logs/notification.log
+touch "$NOTIFICATION_LOG_FILE"
+    cat <<-EOT >>${SUPERVISOR_CONFIG_FILE}
+[program:laravel-notification]
+ numprocs=1
+ autostart=true
+ autorestart=true
+ redirect_stderr=true
+ process_name=%(program_name)s_%(process_num)02d
+ command=php /var/www/artisan notification:worker
+ stdout_logfile=$NOTIFICATION_LOG_FILE
+EOT
+fi
+
+exec /usr/bin/supervisord -c $SUPERVISOR_CONFIG_FILE
